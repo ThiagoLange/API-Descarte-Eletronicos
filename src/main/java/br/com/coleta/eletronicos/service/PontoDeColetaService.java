@@ -1,14 +1,20 @@
 package br.com.coleta.eletronicos.service;
 
+import br.com.coleta.eletronicos.dto.PontoDeColetaRequestDTO;
+import br.com.coleta.eletronicos.dto.PontoDeColetaResponseDTO;
+import br.com.coleta.eletronicos.exception.ResourceNotFoundException;
+import br.com.coleta.eletronicos.mapper.PontoDeColetaMapper;
 import br.com.coleta.eletronicos.model.LixoEletronico;
 import br.com.coleta.eletronicos.model.MateriaisPontoColeta;
 import br.com.coleta.eletronicos.model.PontoDeColeta;
 import br.com.coleta.eletronicos.repository.LixoEletronicoRepository;
 import br.com.coleta.eletronicos.repository.PontoDeColetaRepository;
-import jakarta.persistence.EntityNotFoundException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class PontoDeColetaService {
@@ -20,32 +26,71 @@ public class PontoDeColetaService {
     private LixoEletronicoRepository lixoEletronicoRepository;
 
     @Transactional
-    public PontoDeColeta criarPontoDeColeta(PontoDeColeta pontoDeColeta) {
-        // Se a lista de materiais for nula ou vazia, não há o que processar.
-        if (pontoDeColeta.getMateriaisAceitos() == null || pontoDeColeta.getMateriaisAceitos().isEmpty()) {
-            return pontoDeColetaRepository.save(pontoDeColeta);
+    public PontoDeColetaResponseDTO create(PontoDeColetaRequestDTO requestDTO) {
+        PontoDeColeta entity = new PontoDeColeta();
+        entity.setNome(requestDTO.getNome());
+        entity.setEndereco(requestDTO.getEndereco());
+        entity.setDiaDeColeta(requestDTO.getDiaDeColeta());
+
+        requestDTO.getMateriaisAceitos().forEach(materialDTO -> {
+            LixoEletronico lixo = lixoEletronicoRepository.findById(materialDTO.getLixoEletronicoId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Lixo Eletrônico com ID " + materialDTO.getLixoEletronicoId() + " não encontrado."));
+            MateriaisPontoColeta material = new MateriaisPontoColeta();
+            material.setLixoEletronico(lixo);
+            material.setCapacidadeMaxima(materialDTO.getCapacidadeMaxima());
+            material.setPontoDeColeta(entity); // Link bidirecional
+            entity.getMateriaisAceitos().add(material);
+        });
+
+        PontoDeColeta savedEntity = pontoDeColetaRepository.save(entity);
+        return PontoDeColetaMapper.toResponseDTO(savedEntity);
+    }
+
+    @Transactional(readOnly = true)
+    public List<PontoDeColetaResponseDTO> findAll() {
+        return pontoDeColetaRepository.findAll().stream()
+                .map(PontoDeColetaMapper::toResponseDTO)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional(readOnly = true)
+    public PontoDeColetaResponseDTO findById(Long id) {
+        PontoDeColeta entity = pontoDeColetaRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Ponto de Coleta com id " + id + " não encontrado."));
+        return PontoDeColetaMapper.toResponseDTO(entity);
+    }
+
+    @Transactional
+    public PontoDeColetaResponseDTO update(Long id, PontoDeColetaRequestDTO requestDTO) {
+        PontoDeColeta entity = pontoDeColetaRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Ponto de Coleta com id " + id + " não encontrado."));
+
+        entity.setNome(requestDTO.getNome());
+        entity.setEndereco(requestDTO.getEndereco());
+        entity.setDiaDeColeta(requestDTO.getDiaDeColeta());
+
+        // Estratégia "apague e recrie" para a lista de filhos: simples e eficaz
+        entity.getMateriaisAceitos().clear(); // Graças ao orphanRemoval=true, isso deletará os antigos do DB
+
+        requestDTO.getMateriaisAceitos().forEach(materialDTO -> {
+            LixoEletronico lixo = lixoEletronicoRepository.findById(materialDTO.getLixoEletronicoId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Lixo Eletrônico com ID " + materialDTO.getLixoEletronicoId() + " não encontrado."));
+            MateriaisPontoColeta material = new MateriaisPontoColeta();
+            material.setLixoEletronico(lixo);
+            material.setCapacidadeMaxima(materialDTO.getCapacidadeMaxima());
+            material.setPontoDeColeta(entity);
+            entity.getMateriaisAceitos().add(material);
+        });
+
+        PontoDeColeta updatedEntity = pontoDeColetaRepository.save(entity);
+        return PontoDeColetaMapper.toResponseDTO(updatedEntity);
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        if (!pontoDeColetaRepository.existsById(id)) {
+            throw new ResourceNotFoundException("Ponto de Coleta com id " + id + " não encontrado.");
         }
-
-        // Itera sobre a cópia da lista para evitar problemas de modificação concorrente se necessário
-        for (MateriaisPontoColeta material : pontoDeColeta.getMateriaisAceitos()) {
-            // VERIFICAÇÃO DE NULIDADE para previnir o erro 500
-            if (material.getLixoEletronico() == null || material.getLixoEletronico().getId() == null) {
-                throw new IllegalArgumentException("Cada item em 'materiaisAceitos' deve conter um 'lixoEletronico' com um 'id' válido.");
-            }
-
-            // Garante a referência bidirecional
-            material.setPontoDeColeta(pontoDeColeta);
-
-            // Busca a entidade LixoEletronico COMPLETA do banco de dados
-            Long lixoId = material.getLixoEletronico().getId();
-            LixoEletronico lixoGerenciado = lixoEletronicoRepository.findById(lixoId)
-                    .orElseThrow(() -> new EntityNotFoundException("Lixo Eletrônico com ID " + lixoId + " não encontrado."));
-
-            // Substitui o objeto com apenas o ID pelo objeto completo gerenciado pelo JPA
-            material.setLixoEletronico(lixoGerenciado);
-        }
-
-        // Salva o PontoDeColeta, e o cascade cuidará de salvar os MateriaisPontoColeta
-        return pontoDeColetaRepository.save(pontoDeColeta);
+        pontoDeColetaRepository.deleteById(id);
     }
 }
