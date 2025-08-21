@@ -69,8 +69,7 @@ public class PontoDeColetaService {
         entity.setEndereco(requestDTO.getEndereco());
         entity.setDiaDeColeta(requestDTO.getDiaDeColeta());
 
-        // Estratégia "apague e recrie" para a lista de filhos: simples e eficaz
-        entity.getMateriaisAceitos().clear(); // Graças ao orphanRemoval=true, isso deletará os antigos do DB
+        entity.getMateriaisAceitos().clear();
 
         requestDTO.getMateriaisAceitos().forEach(materialDTO -> {
             LixoEletronico lixo = lixoEletronicoRepository.findById(materialDTO.getLixoEletronicoId())
@@ -92,5 +91,14 @@ public class PontoDeColetaService {
             throw new ResourceNotFoundException("Ponto de Coleta com id " + id + " não encontrado.");
         }
         pontoDeColetaRepository.deleteById(id);
+    }
+
+    // NOVO MÉTODO ADICIONADO
+    @Transactional(readOnly = true)
+    public List<PontoDeColetaResponseDTO> findByLixoEletronicoName(String name) {
+        List<PontoDeColeta> entities = pontoDeColetaRepository.findByLixoEletronicoNameContaining(name);
+        return entities.stream()
+                .map(PontoDeColetaMapper::toResponseDTO)
+                .collect(Collectors.toList());
     }
 }
